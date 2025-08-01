@@ -12,9 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 from .bqml.agent import root_agent as bqml_agent
 from .analytics.agent import root_agent as ds_agent
-from .bigquery.agent import database_agent as db_agent
+from .bigquery.agent import database_agent as bigquery_agent
 
+# Import PostgreSQL agent
+try:
+    from .postgresql.agent import academic_database_agent as postgresql_agent
+    POSTGRESQL_AVAILABLE = True
+except ImportError:
+    postgresql_agent = None
+    POSTGRESQL_AVAILABLE = False
 
-__all__ = ["bqml_agent", "ds_agent", "db_agent"]
+# Dynamic DB agent selection based on environment
+def get_db_agent():
+    """Get the appropriate database agent based on configuration."""
+    use_eric_corpus = os.getenv("USE_ERIC_CORPUS", "false").lower() == "true"
+    
+    if use_eric_corpus and POSTGRESQL_AVAILABLE:
+        return postgresql_agent
+    else:
+        return bigquery_agent
+
+# Default to BigQuery agent for backward compatibility
+db_agent = get_db_agent()
+
+__all__ = ["bqml_agent", "ds_agent", "db_agent", "bigquery_agent"]
+if POSTGRESQL_AVAILABLE:
+    __all__.append("postgresql_agent")

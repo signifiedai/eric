@@ -1,0 +1,164 @@
+# MCP Toolbox Configuration for Eric's Academic Corpus
+# This configuration enables ADK agents to access Eric's PostgreSQL database
+# containing 111 papers and 31,847 concept-based chunks of Frankfurt School critical theory
+
+apiVersion: v1
+kind: ToolboxConfig
+metadata:
+  name: eric-academic-corpus
+  description: "Eric's Frankfurt School Critical Theory Corpus with CHASE-SQL integration"
+  version: "1.0.0"
+
+sources:
+  eric_corpus_db:
+    type: postgresql
+    description: "Eric's academic corpus with page-accurate citations and dual embeddings"
+    config:
+      host: "${POSTGRES_HOST:-localhost}"
+      port: "${POSTGRES_PORT:-5432}"
+      database: "${POSTGRES_DB:-paper_chunks}"
+      username: "${POSTGRES_USER:-eric_production}"
+      password: "${POSTGRES_PASSWORD:-secure_production_2025}"
+      ssl_mode: "prefer"
+      connection_pool:
+        max_connections: 10
+        min_connections: 2
+        idle_timeout: 300
+    metadata:
+      corpus_type: "academic"
+      total_papers: 111
+      total_chunks: 31847
+      academic_focus: "Frankfurt School critical theory"
+      embeddings: ["specter2", "openai"]
+
+tools:
+  corpus_overview:
+    source: eric_corpus_db
+    description: "Get overview statistics of Eric's academic corpus"
+    sql: |
+      SELECT 
+        COUNT(DISTINCT p.paper_id) as total_papers,
+        COUNT(DISTINCT c.chunk_id) as total_chunks,
+        ROUND(AVG(c.academic_quality_score), 3) as avg_quality_score,
+        COUNT(DISTINCT c.chunk_type) as unique_chunk_types,
+        SUM(c.word_count) as total_words,
+        MIN(p.publication_year) as earliest_year,
+        MAX(p.publication_year) as latest_year
+      FROM papers p
+      LEFT JOIN paper_chunks c ON p.paper_id = c.paper_id
+    parameters: []
+    
+  search_papers_by_topic:
+    source: eric_corpus_db
+    description: "Search for papers by topic or keyword"
+    sql: |
+      SELECT 
+        p.paper_id,
+        p.title,
+        p.authors,
+        p.publication_year,
+        p.abstract
+      FROM papers p
+      WHERE 
+        p.title ILIKE '%' || $1 || '%' OR
+        p.abstract ILIKE '%' || $1 || '%' OR
+        EXISTS (
+          SELECT 1 FROM paper_chunks c 
+          WHERE c.paper_id = p.paper_id 
+          AND c.content ILIKE '%' || $1 || '%'
+        )
+      ORDER BY p.publication_year DESC
+      LIMIT 20
+    parameters:
+      - name: topic
+        type: string
+        description: "Topic or keyword to search for"
+        
+  find_chunks_with_citations:
+    source: eric_corpus_db
+    description: "Find chunks that contain citations on a specific topic"
+    sql: |
+      SELECT 
+        c.chunk_id,
+        c.paper_title,
+        c.title as section_title,
+        c.content,
+        c.page_numbers,
+        cm.citations,
+        c.academic_quality_score
+      FROM paper_chunks c
+      LEFT JOIN chunk_metadata cm ON c.chunk_id = cm.chunk_id
+      WHERE 
+        cm.citations IS NOT NULL 
+        AND cm.citations != '[]'
+        AND (
+          c.content ILIKE '%' || $1 || '%' OR
+          c.title ILIKE '%' || $1 || '%'
+        )
+      ORDER BY c.academic_quality_score DESC
+      LIMIT 15
+    parameters:
+      - name: topic
+        type: string
+        description: "Topic to search for in chunks with citations"
+        
+  analyze_concepts_by_type:
+    source: eric_corpus_db
+    description: "Analyze key concepts by chunk type (introduction, methodology, etc.)"
+    sql: |
+      SELECT 
+        c.chunk_type,
+        COUNT(*) as chunk_count,
+        ROUND(AVG(c.academic_quality_score), 3) as avg_quality,
+        ROUND(AVG(c.word_count), 0) as avg_words,
+        STRING_AGG(DISTINCT unnest(cm.key_concepts), ', ') as common_concepts
+      FROM paper_chunks c
+      LEFT JOIN chunk_metadata cm ON c.chunk_id = cm.chunk_id
+      WHERE c.chunk_type IS NOT NULL
+      GROUP BY c.chunk_type
+      ORDER BY chunk_count DESC
+    parameters: []
+    
+  search_by_quality_score:
+    source: eric_corpus_db
+    description: "Find highest quality academic chunks above a certain score"
+    sql: |
+      SELECT 
+        c.chunk_id,
+        c.paper_title,
+        c.title,
+        LEFT(c.content, 300) as content_preview,
+        c.page_numbers,
+        c.academic_quality_score,
+        c.chunk_type
+      FROM paper_chunks c
+      WHERE c.academic_quality_score >= $1
+      ORDER BY c.academic_quality_score DESC
+      LIMIT 20
+    parameters:
+      - name: min_score
+        type: number
+        description: "Minimum academic quality score (0.0-1.0)"
+        default: 0.8
+
+security:
+  authentication:
+    type: "database_credentials"
+  authorization:
+    read_only: true
+    allowed_operations: ["SELECT"]
+    blocked_operations: ["INSERT", "UPDATE", "DELETE", "CREATE", "DROP"]
+  rate_limiting:
+    requests_per_minute: 60
+    concurrent_connections: 5
+
+monitoring:
+  logging:
+    level: "INFO"
+    include_query_plans: true
+  metrics:
+    enable_performance_tracking: true
+    enable_usage_analytics: true
+  alerts:
+    slow_query_threshold: "5s"
+    connection_failure_threshold: 3
