@@ -36,8 +36,15 @@ def get_db_agent():
     else:
         return bigquery_agent
 
-# Default to BigQuery agent for backward compatibility
-db_agent = get_db_agent()
+# Dynamic db_agent proxy that selects the right agent at runtime
+class _DBAgentProxy:
+    def __getattr__(self, name):
+        # Get the appropriate agent at runtime based on current environment
+        agent = get_db_agent()
+        return getattr(agent, name)
+
+# Dynamic db_agent that selects the right agent at runtime
+db_agent = _DBAgentProxy()
 
 __all__ = ["bqml_agent", "ds_agent", "db_agent", "bigquery_agent"]
 if POSTGRESQL_AVAILABLE:
